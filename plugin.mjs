@@ -1,10 +1,10 @@
 import { columnId, fields, keyFromFilteredFeed, selectedKey, timelineModel } from './timeline-model.mjs?v=3';
 
-// Listen before loading the SDK so an editor config update cannot start the
-// subscriptions ahead of the host's initialization reply.
+// Listen before loading the SDK so a late initialization reply can restart
+// subscriptions with the host's current instance ID.
 const initialized = new Promise(resolve => {
   function onInit(event) {
-    if (event.source !== window.parent || event.data?.type !== 'wb:plugin:init' || !event.data.result?.id) return;
+    if (event.source !== window.parent || event.data?.type !== 'wb:plugin:init' || event.data.error) return;
     window.removeEventListener('message', onInit);
     // Let the SDK's message listener apply the instance ID before using it.
     setTimeout(resolve, 0);
@@ -53,6 +53,7 @@ function render(model) {
     loading: 'Loading activity for the selected incident…',
     empty: 'No recorded activity for this incident.',
     connecting: 'Connecting to Sigma…',
+    connectionTimeout: 'Sigma has not supplied the timeline configuration. Refresh this plugin from its element menu.',
     standalone: 'Open the timeline from the Sigma workbook to see incident activity.',
     waiting: 'Waiting for rows from Incident Timeline Feed…',
     feedTimeout: 'Sigma found the timeline source but did not send rows.',
@@ -174,14 +175,31 @@ function bind(config) {
 
 render({ status: window.parent === window ? 'standalone' : 'connecting' });
 let disposeConfig = () => {};
+let startupTimer;
 if (window.parent !== window) {
-  await initialized;
+  let canBind = false;
+  disposeConfig = client.config.subscribe(config => {
+    if (canBind) bind(config);
+  });
+  startupTimer = setTimeout(() => {
+    canBind = true;
+    const config = client.config.get();
+    if (config && Object.keys(config).length) bind(config);
+    else render({ status: 'connectionTimeout' });
+  }, 1500);
+  // Register the settings on startup, including in hosts that supply the
+  // instance and its configuration in the iframe URL.
   client.config.configureEditorPanel(editorPanel);
-  disposeConfig = client.config.subscribe(bind);
-  bind(client.config.get());
+  void initialized.then(() => {
+    clearTimeout(startupTimer);
+    canBind = true;
+    state.binding = '';
+    bind(client.config.get());
+  });
 }
 window.addEventListener('pagehide', () => {
   state.generation += 1;
+  clearTimeout(startupTimer);
   clearTimeout(feedTimer);
   disposeConfig();
   disposeData();
