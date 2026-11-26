@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Scan toy barcode</title>
+  <link rel="stylesheet" href="./scanner.css">
+  <script defer src="./vendor/zxing-browser.min.js"></script>
+  <script type="module" src="./scanner.mjs"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">WonderWorks Toys</p>
+      <h1>Scan toy barcode</h1>
+      <p>Scan a label that contains the toy’s internal SKU.</p>
+    </header>
+    <section aria-label="Camera">
+      <div class="camera" id="camera" hidden>
+        <video id="preview" muted playsinline aria-label="Barcode camera preview"></video>
+      </div>
+      <div class="actions">
+        <button type="button" id="start">Start camera</button>
+        <button type="button" id="stop" hidden>Stop camera</button>
+        <label class="secondary" for="photo">Scan a photo</label>
+        <input id="photo" type="file" accept="image/*" capture="environment">
+      </div>
+      <p class="hint">Camera frames and photos stay in your browser.</p>
+    </section>
+    <form id="lookup">
+      <label for="code">Toy SKU</label>
+      <input id="code" type="text" required maxlength="100" autocomplete="off" spellcheck="false" placeholder="Scan, type, or paste the SKU">
+      <div class="actions">
+        <button id="open" type="submit">Look up in Sigma</button>
+        <button type="button" id="copy" class="secondary">Copy code</button>
+      </div>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>
