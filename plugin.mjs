@@ -1,7 +1,8 @@
-import { fields, selectedKey, timelineModel } from './timeline-model.mjs';
+import { columnId, fields, keyFromFilteredFeed, selectedKey, timelineModel } from './timeline-model.mjs?v=2';
 
 const { client } = window.SigmaPlugin;
 const sourceLabel = 'Incident Timeline Feed';
+const filteredFeedColumns = { positionKey: 'APvOhCozeH', eventType: 'bplybC3qTW' };
 const events = document.querySelector('#events');
 const incident = document.querySelector('#incident');
 const date = new Intl.DateTimeFormat('en-US', {
@@ -37,6 +38,7 @@ function render(model) {
     unselected: 'Select an incident to view its activity.',
     loading: 'Loading activity for the selected incident…',
     empty: 'No recorded activity for this incident.',
+    waiting: 'Waiting for the incident feed…',
     unavailable: 'The timeline source is unavailable.',
   };
   if (model.status !== 'ready') {
@@ -63,12 +65,22 @@ function render(model) {
 }
 
 function refresh() {
-  render(timelineModel(state.data, state.columns, state.key));
+  let key = state.key;
+  // These columns belong to the workbook feed filtered by the selected incident.
+  // A context row provides that incident when Sigma does not send a usable control value.
+  if (!key && Object.entries(filteredFeedColumns).every(([name, id]) => state.columns[name] === id)) {
+    if (!state.data) {
+      render({ status: 'waiting' });
+      return;
+    }
+    key = keyFromFilteredFeed(state.data, state.columns);
+  }
+  render(timelineModel(state.data, state.columns, key));
 }
 
 function bind(config = {}) {
   const { source, selection } = config;
-  const columns = Object.fromEntries(fields.map(({ name }) => [name, config[name]]));
+  const columns = Object.fromEntries(fields.map(({ name }) => [name, columnId(config[name])]));
   const binding = JSON.stringify([source, selection, columns]);
   if (state.binding === binding) return;
 

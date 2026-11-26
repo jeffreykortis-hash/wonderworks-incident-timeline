@@ -15,7 +15,11 @@ export const fields = [
 function unwrap(value) {
   if (Array.isArray(value)) return value.flatMap(unwrap);
   if (value && typeof value === 'object') {
-    return unwrap(value.defaultValue ?? value.value ?? value.values ?? value.selectedValues);
+    for (const name of ['value', 'defaultValue', 'values', 'selectedValues', 'val']) {
+      const candidates = unwrap(value[name]);
+      if (candidates.length) return candidates;
+    }
+    return [];
   }
   return typeof value === 'string' && value.trim() ? [value.trim()] : [];
 }
@@ -27,6 +31,27 @@ export function selectedKey(variable) {
 
 function asText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export function columnId(binding) {
+  if (Array.isArray(binding)) return binding.length === 1 ? columnId(binding[0]) : null;
+  if (binding && typeof binding === 'object') {
+    return columnId(binding.columnId ?? binding.columnIds);
+  }
+  return asText(binding) || null;
+}
+
+export function keyFromFilteredFeed(data, columns) {
+  const keys = data?.[columns.positionKey];
+  const types = data?.[columns.eventType];
+  if (!Array.isArray(keys) || !Array.isArray(types)) return null;
+
+  const distinctKeys = new Set(keys.map(asText).filter(Boolean));
+  if (distinctKeys.size !== 1) return null;
+  const key = distinctKeys.values().next().value;
+  return types.some((kind, index) =>
+    asText(kind) === 'Incident context' && asText(keys[index]) === key,
+  ) ? key : null;
 }
 
 function asTimestamp(value) {
