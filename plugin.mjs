@@ -1,7 +1,8 @@
-import { columnId, fields, keyFromFilteredFeed, selectedKey, timelineModel } from './timeline-model.mjs?v=2';
+import { columnId, fields, keyFromFilteredFeed, selectedKey, timelineModel } from './timeline-model.mjs?v=3';
 
 const { client } = window.SigmaPlugin;
 const sourceLabel = 'Incident Timeline Feed';
+const filteredFeedId = 'pjpaGaDuC0';
 const filteredFeedColumns = { positionKey: 'APvOhCozeH', eventType: 'bplybC3qTW' };
 const events = document.querySelector('#events');
 const incident = document.querySelector('#incident');
@@ -18,7 +19,7 @@ client.config.configureEditorPanel([
   })),
 ]);
 
-const state = { data: null, key: null, columns: {}, binding: '', generation: 0 };
+const state = { data: null, key: null, columns: {}, filteredFeed: false, binding: '', generation: 0 };
 let disposeData = () => {};
 let disposeSelection = () => {};
 
@@ -38,7 +39,10 @@ function render(model) {
     unselected: 'Select an incident to view its activity.',
     loading: 'Loading activity for the selected incident…',
     empty: 'No recorded activity for this incident.',
-    waiting: 'Waiting for the incident feed…',
+    connecting: 'Connecting to Sigma…',
+    standalone: 'Open the timeline from the Sigma workbook to see incident activity.',
+    waiting: 'Waiting for rows from Incident Timeline Feed…',
+    noContext: 'The feed has no single incident context. Check the source element and select a queue row.',
     unavailable: 'The timeline source is unavailable.',
   };
   if (model.status !== 'ready') {
@@ -68,19 +72,23 @@ function refresh() {
   let key = state.key;
   // These columns belong to the workbook feed filtered by the selected incident.
   // A context row provides that incident when Sigma does not send a usable control value.
-  if (!key && Object.entries(filteredFeedColumns).every(([name, id]) => state.columns[name] === id)) {
+  if (!key && state.filteredFeed) {
     if (!state.data) {
       render({ status: 'waiting' });
       return;
     }
     key = keyFromFilteredFeed(state.data, state.columns);
+    if (!key) {
+      render({ status: 'noContext' });
+      return;
+    }
   }
   render(timelineModel(state.data, state.columns, key));
 }
 
-function bind(config = {}) {
-  const { source, selection } = config;
-  const columns = Object.fromEntries(fields.map(({ name }) => [name, columnId(config[name])]));
+function bind(config) {
+  const { source, selection } = config ?? {};
+  const columns = Object.fromEntries(fields.map(({ name }) => [name, columnId(config?.[name])]));
   const binding = JSON.stringify([source, selection, columns]);
   if (state.binding === binding) return;
 
@@ -93,6 +101,9 @@ function bind(config = {}) {
   state.data = null;
   state.key = null;
   state.columns = columns;
+  const sourceId = typeof source === 'string' ? source : source?.elementId ?? source?.id;
+  state.filteredFeed = sourceId === filteredFeedId
+    || Object.entries(filteredFeedColumns).every(([name, id]) => columns[name] === id);
 
   if (!source || !selection || fields.some(({ name }) => !columns[name])) {
     render({ status: 'setup' });
@@ -106,8 +117,10 @@ function bind(config = {}) {
       state.key = selectedKey(variable);
       refresh();
     });
-    disposeData = client.elements.subscribeToElementData('source', data => {
+    disposeData = client.elements.subscribeToElementData('source', payload => {
       if (generation !== state.generation) return;
+      const value = Array.isArray(payload) && payload.length === 1 ? payload[0] : payload;
+      const data = value?.data && !Array.isArray(value.data) ? value.data : value;
       if (!data) {
         state.data = null;
         render({ status: 'unavailable', key: state.key });
@@ -122,7 +135,9 @@ function bind(config = {}) {
   }
 }
 
-bind(client.config.get());
+// The SDK sends the config event after the host initializes the plugin instance.
+// Subscribing from prehydrated config can send requests before the instance has an ID.
+render({ status: window.parent === window ? 'standalone' : 'connecting' });
 const disposeConfig = client.config.subscribe(bind);
 window.addEventListener('pagehide', () => {
   state.generation += 1;
