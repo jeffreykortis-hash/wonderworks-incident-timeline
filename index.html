@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Incident timeline</title>
+  <link rel="stylesheet" href="./timeline.css">
+  <script defer src="./vendor/react.production.min.js"></script>
+  <script defer src="./vendor/sigmacomputing-plugin.umd.js"></script>
+  <script type="module" src="./plugin.mjs"></script>
+</head>
+<body>
+  <main id="timeline" class="timeline" aria-label="Incident timeline">
+    <header><h1>Incident timeline</h1><p id="incident"></p></header>
+    <div id="events" aria-live="polite" aria-atomic="false"></div>
+  </main>
+</body>
+</html>
