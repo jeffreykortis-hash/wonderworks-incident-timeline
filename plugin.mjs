@@ -1,5 +1,17 @@
 import { columnId, fields, keyFromFilteredFeed, selectedKey, timelineModel } from './timeline-model.mjs?v=3';
 
+// Listen before loading the SDK so an editor config update cannot start the
+// subscriptions ahead of the host's initialization reply.
+const initialized = new Promise(resolve => {
+  function onInit(event) {
+    if (event.source !== window.parent || event.data?.type !== 'wb:plugin:init' || !event.data.result?.id) return;
+    window.removeEventListener('message', onInit);
+    // Let the SDK's message listener apply the instance ID before using it.
+    setTimeout(resolve, 0);
+  }
+  window.addEventListener('message', onInit);
+});
+await import('./vendor/sigmacomputing-plugin.umd.js');
 const { client } = window.SigmaPlugin;
 const sourceLabel = 'Incident Timeline Feed';
 const filteredFeedId = 'pjpaGaDuC0';
@@ -10,18 +22,19 @@ const date = new Intl.DateTimeFormat('en-US', {
   dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Chicago',
 });
 
-client.config.configureEditorPanel([
+const editorPanel = [
   { name: 'source', label: sourceLabel, type: 'element' },
   { name: 'selection', label: 'Selected incident control', type: 'variable', allowedTypes: ['text', 'text-list'] },
   ...fields.map(field => ({
     name: field.name, label: field.label, type: 'column', source: 'source',
     allowMultiple: false, allowedTypes: [field.type],
   })),
-]);
+];
 
-const state = { data: null, key: null, columns: {}, filteredFeed: false, binding: '', generation: 0 };
+const state = { data: null, key: null, columns: {}, filteredFeed: false, binding: '', generation: 0, waiting: 'waiting' };
 let disposeData = () => {};
 let disposeSelection = () => {};
+let feedTimer;
 
 function el(tag, className, value) {
   const element = document.createElement(tag);
@@ -42,6 +55,9 @@ function render(model) {
     connecting: 'Connecting to Sigma…',
     standalone: 'Open the timeline from the Sigma workbook to see incident activity.',
     waiting: 'Waiting for rows from Incident Timeline Feed…',
+    feedTimeout: 'Sigma found the timeline source but did not send rows.',
+    sourceTimeout: 'Sigma did not respond to the timeline source request.',
+    sourceRejected: 'Sigma could not read the configured timeline source.',
     noContext: 'The feed has no single incident context. Check the source element and select a queue row.',
     unavailable: 'The timeline source is unavailable.',
   };
@@ -70,13 +86,13 @@ function render(model) {
 
 function refresh() {
   let key = state.key;
+  if (state.filteredFeed && !state.data) {
+    render({ status: state.waiting, key });
+    return;
+  }
   // These columns belong to the workbook feed filtered by the selected incident.
   // A context row provides that incident when Sigma does not send a usable control value.
   if (!key && state.filteredFeed) {
-    if (!state.data) {
-      render({ status: 'waiting' });
-      return;
-    }
     key = keyFromFilteredFeed(state.data, state.columns);
     if (!key) {
       render({ status: 'noContext' });
@@ -94,11 +110,13 @@ function bind(config) {
 
   state.binding = binding;
   const generation = ++state.generation;
+  clearTimeout(feedTimer);
   disposeData();
   disposeSelection();
   disposeData = () => {};
   disposeSelection = () => {};
   state.data = null;
+  state.waiting = 'waiting';
   state.key = null;
   state.columns = columns;
   const sourceId = typeof source === 'string' ? source : source?.elementId ?? source?.id;
@@ -111,6 +129,22 @@ function bind(config) {
   }
 
   try {
+    let sourceStatus = 'sourceTimeout';
+    function updateSourceStatus(status) {
+      sourceStatus = status;
+      if (generation !== state.generation || state.data || state.waiting === 'waiting') return;
+      state.waiting = status;
+      refresh();
+    }
+    feedTimer = setTimeout(() => {
+      if (generation !== state.generation || state.data) return;
+      state.waiting = sourceStatus;
+      refresh();
+    }, 10000);
+    client.elements.getElementColumns('source').then(
+      columns => updateSourceStatus(columns == null ? 'sourceRejected' : 'feedTimeout'),
+      () => updateSourceStatus('sourceRejected'),
+    );
     state.key = selectedKey(client.config.getVariable('selection'));
     disposeSelection = client.config.subscribeToWorkbookVariable('selection', variable => {
       if (generation !== state.generation) return;
@@ -119,11 +153,13 @@ function bind(config) {
     });
     disposeData = client.elements.subscribeToElementData('source', payload => {
       if (generation !== state.generation) return;
+      clearTimeout(feedTimer);
       const value = Array.isArray(payload) && payload.length === 1 ? payload[0] : payload;
       const data = value?.data && !Array.isArray(value.data) ? value.data : value;
       if (!data) {
         state.data = null;
-        render({ status: 'unavailable', key: state.key });
+        state.waiting = 'sourceRejected';
+        render({ status: state.waiting, key: state.key });
         return;
       }
       state.data = data;
@@ -131,16 +167,22 @@ function bind(config) {
     });
     refresh();
   } catch {
+    clearTimeout(feedTimer);
     render({ status: 'unavailable' });
   }
 }
 
-// The SDK sends the config event after the host initializes the plugin instance.
-// Subscribing from prehydrated config can send requests before the instance has an ID.
 render({ status: window.parent === window ? 'standalone' : 'connecting' });
-const disposeConfig = client.config.subscribe(bind);
+let disposeConfig = () => {};
+if (window.parent !== window) {
+  await initialized;
+  client.config.configureEditorPanel(editorPanel);
+  disposeConfig = client.config.subscribe(bind);
+  bind(client.config.get());
+}
 window.addEventListener('pagehide', () => {
   state.generation += 1;
+  clearTimeout(feedTimer);
   disposeConfig();
   disposeData();
   disposeSelection();
