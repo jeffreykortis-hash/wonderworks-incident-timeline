@@ -7,7 +7,7 @@ const initialized = new Promise(resolve => {
     if (event.source !== window.parent || event.data?.type !== 'wb:plugin:init' || event.data.error) return;
     window.removeEventListener('message', onInit);
     // Let the SDK's message listener apply the instance ID before using it.
-    setTimeout(resolve, 0);
+    setTimeout(() => resolve(event.data.result?.id), 0);
   }
   window.addEventListener('message', onInit);
 });
@@ -56,9 +56,8 @@ function render(model) {
     connectionTimeout: 'Sigma has not supplied the timeline configuration. Refresh this plugin from its element menu.',
     standalone: 'Open the timeline from the Sigma workbook to see incident activity.',
     waiting: 'Waiting for rows from Incident Timeline Feed…',
-    feedTimeout: 'Sigma found the timeline source but did not send rows.',
-    sourceTimeout: 'Sigma did not respond to the timeline source request.',
-    sourceRejected: 'Sigma could not read the configured timeline source.',
+    sourceTimeout: 'The timeline feed did not return rows.',
+    sourceRejected: 'Sigma could not read the selected source. Reconnect the Incident Timeline Feed in Properties.',
     noContext: 'The feed has no single incident context. Check the source element and select a queue row.',
     unavailable: 'The timeline source is unavailable.',
   };
@@ -87,7 +86,7 @@ function render(model) {
 
 function refresh() {
   let key = state.key;
-  if (state.filteredFeed && !state.data) {
+  if (!state.data) {
     render({ status: state.waiting, key });
     return;
   }
@@ -105,8 +104,9 @@ function refresh() {
 
 function bind(config) {
   const { source, selection } = config ?? {};
+  const sourceId = typeof source === 'string' ? source : source?.elementId ?? source?.id;
   const columns = Object.fromEntries(fields.map(({ name }) => [name, columnId(config?.[name])]));
-  const binding = JSON.stringify([source, selection, columns]);
+  const binding = JSON.stringify([sourceId, selection, columns]);
   if (state.binding === binding) return;
 
   state.binding = binding;
@@ -120,44 +120,32 @@ function bind(config) {
   state.waiting = 'waiting';
   state.key = null;
   state.columns = columns;
-  const sourceId = typeof source === 'string' ? source : source?.elementId ?? source?.id;
   state.filteredFeed = sourceId === filteredFeedId
     || Object.entries(filteredFeedColumns).every(([name, id]) => columns[name] === id);
 
-  if (!source || !selection || fields.some(({ name }) => !columns[name])) {
+  if (typeof sourceId !== 'string' || !sourceId.trim() || !selection || fields.some(({ name }) => !columns[name])) {
     render({ status: 'setup' });
     return;
   }
 
   try {
-    let sourceStatus = 'sourceTimeout';
-    function updateSourceStatus(status) {
-      sourceStatus = status;
-      if (generation !== state.generation || state.data || state.waiting === 'waiting') return;
-      state.waiting = status;
-      refresh();
-    }
     feedTimer = setTimeout(() => {
       if (generation !== state.generation || state.data) return;
-      state.waiting = sourceStatus;
+      state.waiting = 'sourceTimeout';
       refresh();
     }, 10000);
-    client.elements.getElementColumns('source').then(
-      columns => updateSourceStatus(columns == null ? 'sourceRejected' : 'feedTimeout'),
-      () => updateSourceStatus('sourceRejected'),
-    );
     state.key = selectedKey(client.config.getVariable('selection'));
     disposeSelection = client.config.subscribeToWorkbookVariable('selection', variable => {
       if (generation !== state.generation) return;
       state.key = selectedKey(variable);
       refresh();
     });
-    disposeData = client.elements.subscribeToElementData('source', payload => {
+    disposeData = client.elements.subscribeToElementData('source', (payload, error) => {
       if (generation !== state.generation) return;
       clearTimeout(feedTimer);
       const value = Array.isArray(payload) && payload.length === 1 ? payload[0] : payload;
       const data = value?.data && !Array.isArray(value.data) ? value.data : value;
-      if (!data) {
+      if (error || !data) {
         state.data = null;
         state.waiting = 'sourceRejected';
         render({ status: state.waiting, key: state.key });
@@ -177,20 +165,30 @@ render({ status: window.parent === window ? 'standalone' : 'connecting' });
 let disposeConfig = () => {};
 let startupTimer;
 if (window.parent !== window) {
-  let canBind = false;
+  let instanceId;
+  try {
+    instanceId = JSON.parse(new URLSearchParams(location.search).get('id'));
+  } catch {
+    // Sigma may supply the instance ID in its reply instead of in the URL.
+  }
+  let canBind = typeof instanceId === 'string' && !!instanceId;
   disposeConfig = client.config.subscribe(config => {
     if (canBind) bind(config);
   });
   startupTimer = setTimeout(() => {
-    canBind = true;
     const config = client.config.get();
-    if (config && Object.keys(config).length) bind(config);
+    if (canBind && config && Object.keys(config).length) bind(config);
     else render({ status: 'connectionTimeout' });
   }, 1500);
   // Register the settings on startup, including in hosts that supply the
   // instance and its configuration in the iframe URL.
   client.config.configureEditorPanel(editorPanel);
-  void initialized.then(() => {
+  void initialized.then(id => {
+    if (typeof id === 'string' && id) {
+      if (id !== instanceId) state.binding = '';
+      instanceId = id;
+    }
+    if (!instanceId) return;
     clearTimeout(startupTimer);
     canBind = true;
     state.binding = '';
